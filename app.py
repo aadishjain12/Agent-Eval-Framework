@@ -1,18 +1,22 @@
 import streamlit as st
 import google.generativeai as genai
 import json
-import re
 import pandas as pd
 import time
-import random
-from datetime import datetime
-import base64
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Adya Enterprise Evaluation Cloud", page_icon="🚀", layout="wide")
+st.set_page_config(page_title="Adya Agent Workbench", page_icon="🧪", layout="wide")
 
 # !!! PASTE API KEY HERE !!!
-GOOGLE_API_KEY = "AIzaSyDw0X1moWqKVO5QzlyKbEFZws97k8zNFzE"
+# --- SECURE API KEY HANDLING ---
+try:
+    # Try loading from Streamlit secrets (Local or Cloud)
+    GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
+except FileNotFoundError:
+    st.error("❌ API Key not found! Please create .streamlit/secrets.toml")
+    st.stop()
+
+genai.configure(api_key=GOOGLE_API_KEY) 
 
 if GOOGLE_API_KEY == "YOUR_GOOGLE_API_KEY_HERE":
     st.error("⚠️ Please paste your Google API Key in the code.")
@@ -20,193 +24,227 @@ if GOOGLE_API_KEY == "YOUR_GOOGLE_API_KEY_HERE":
 
 genai.configure(api_key=GOOGLE_API_KEY)
 
+# --- 2. MODEL SETUP (The Fix) ---
 @st.cache_resource
 def get_model():
+    """
+    Auto-detects the best available model to prevent 404 errors.
+    """
     try:
+        # Ask Google what models are available
         models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        # Priority: Flash (Fast) -> Pro (Smart) -> Legacy Pro
         for m in models:
             if "flash" in m: return genai.GenerativeModel(m)
-        return genai.GenerativeModel("gemini-1.5-pro")
-    except:
+        for m in models:
+            if "pro" in m: return genai.GenerativeModel(m)
+            
+        # Fallback
+        return genai.GenerativeModel("gemini-pro")
+    except Exception as e:
+        st.error(f"Error connecting to Gemini: {e}")
         return None
 
+# !!! THIS LINE WAS MISSING OR DELETED !!!
+# We must initialize the global variable 'model' here
 model = get_model()
 
-# --- 2. ADVANCED METRICS CALCULATOR (Precision/Recall/F1) ---
-def calculate_ml_metrics(df):
-    """Calculates Precision, Recall, and F1 based on Tool Usage."""
-    # Logic: 
-    # True Positive (TP): Tool score is 100 (Correct tool used)
-    # False Positive (FP): Tool score is 0 (Wrong tool used)
-    # False Negative (FN): Safety Fail (Missed a required check)
-    
-    tp = len(df[df['Orchestration'] == 100])
-    fp = len(df[df['Orchestration'] == 0])
-    fn = len(df[df['Safety Check'].str.contains("Fail")]) # Using safety fail as proxy for missed steps
-    
-    # Avoid div by zero
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
-    
-    return precision * 100, recall * 100, f1 * 100
+if model is None:
+    st.error("Failed to load Gemini Model. Check API Key.")
+    st.stop()
 
-# --- 3. HTML REPORT GENERATOR ---
-def generate_html_report(df, agent_type, quality_gate, precision, recall, f1):
-    avg_roi = df['ROI Score'].mean()
-    passed = avg_roi >= quality_gate
-    status_color = "#2ecc71" if passed else "#e74c3c"
-    status_text = "PASSED QUALITY GATE" if passed else "FAILED QUALITY GATE"
-    
-    html = f"""
-    <html>
-    <head>
-        <style>
-            body {{ font-family: 'Segoe UI', sans-serif; margin: 40px; background-color: #f4f6f8; }}
-            .header {{ background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }}
-            .badge {{ background-color: {status_color}; color: white; padding: 10px 20px; border-radius: 20px; font-weight: bold; }}
-            .metric-box {{ display: inline-block; width: 150px; padding: 15px; background: #fff; margin: 5px; border-radius: 8px; text-align: center; border: 1px solid #ddd; }}
-            .metric-val {{ font-size: 20px; font-weight: bold; color: #2c3e50; }}
-            .metric-label {{ font-size: 12px; color: #7f8c8d; }}
-            table {{ width: 100%; border-collapse: collapse; margin-top: 30px; background: white; }}
-            th {{ background-color: #34495e; color: white; padding: 12px; text-align: left; }}
-            td {{ border-bottom: 1px solid #ddd; padding: 12px; }}
-            tr:nth-child(even) {{ background-color: #f9f9f9; }}
-        </style>
-    </head>
-    <body>
-        <div class="header">
-            <h1>🚀 Adya AI - Advanced Quality Report</h1>
-            <p><strong>Agent:</strong> {agent_type} | <strong>Date:</strong> {datetime.now().strftime("%Y-%m-%d %H:%M")}</p>
-            <span class="badge">{status_text}</span>
-            <div style="margin-top: 20px;">
-                <div class="metric-box"><div class="metric-val">{avg_roi:.1f}%</div><div class="metric-label">Business ROI</div></div>
-                <div class="metric-box"><div class="metric-val">{precision:.1f}%</div><div class="metric-label">Precision</div></div>
-                <div class="metric-box"><div class="metric-val">{recall:.1f}%</div><div class="metric-label">Recall</div></div>
-                <div class="metric-box"><div class="metric-val">{f1:.1f}%</div><div class="metric-label">F1 Score</div></div>
-            </div>
-        </div>
-        <h3>Detailed Audit Logs</h3>
-        <table>
-            <tr><th>Scenario</th><th>Response</th><th>ROI</th><th>Semantic</th></tr>
+# --- 3. SESSION STATE MANAGEMENT ---
+# (The rest of your code continues below...)
+
+# --- 2. SESSION STATE MANAGEMENT ---
+if "messages" not in st.session_state:
+    st.session_state.messages = [] # Stores chat history
+if "custom_metrics" not in st.session_state:
+    st.session_state.custom_metrics = [
+        "Hallucination Check", 
+        "Tone Consistency", 
+        "Goal Completion"
+    ] # Default metrics
+if "eval_results" not in st.session_state:
+    st.session_state.eval_results = {}
+
+# --- 3. AGENT LOGIC (Chat) ---
+def get_agent_response(history, system_prompt):
     """
-    for _, row in df.iterrows():
-        html += f"""<tr><td><b>{row['Persona']}</b><br>{row['Intent']}</td><td>{row['Response'][:100]}...</td><td>{row['ROI Score']}%</td><td>{row['Semantic Similarity']}%</td></tr>"""
-    html += "</table></body></html>"
-    return html
-
-# --- 4. SCENARIO GENERATOR ---
-def generate_scenarios(agent_type, num_cases=10):
-    scenarios = []
-    if agent_type == "Sales Agent":
-        personas = [{"type": "CFO", "focus": "ROI", "tone": "Direct"}, {"type": "Founder", "focus": "Speed", "tone": "Casual"}]
-        intents = ["Pricing Inquiry", "Book Demo"]
-        ideal = "We offer flexible pricing. I can schedule a demo to show value."
-    elif agent_type == "Banking Agent":
-        personas = [{"type": "Fraud Victim", "focus": "Freeze", "tone": "Panicked"}, {"type": "VIP", "focus": "Invest", "tone": "Demanding"}]
-        intents = ["Report Fraud", "Check Balance"]
-        ideal = "I have secured your account. Please verify identity via OTP."
-
-    for i in range(num_cases):
-        p = random.choice(personas)
-        intent = random.choice(intents)
-        scenarios.append({
-            "id": i+1, "persona": p['type'], "intent": intent, 
-            "input": f"[{p['type']}] Regarding {intent}. Focus: {p['focus']}. {p['tone']}.",
-            "ideal": ideal
-        })
-    return scenarios
-
-# --- 5. AGENT LOGIC ---
-def run_agent(agent_type, user_query, custom_prompt):
-    if custom_prompt: sys_prompt = custom_prompt
-    else:
-        sys_prompt = "You are a Sales AI. Tools: [TOOL: book_demo], [TOOL: send_pricing]." if agent_type == "Sales Agent" else "You are a Banking AI. Tools: [TOOL: freeze_account], [TOOL: send_otp]."
+    Sends the entire chat history to the model to maintain context.
+    """
     try:
-        return model.generate_content(f"{sys_prompt}\nUser: {user_query}\nAction:").text.strip()
-    except: return "Error"
+        # Construct the full prompt context
+        full_prompt = f"SYSTEM: {system_prompt}\n\n"
+        for msg in history:
+            role = "USER" if msg["role"] == "user" else "AGENT"
+            full_prompt += f"{role}: {msg['content']}\n"
+        full_prompt += "AGENT:"
+        
+        response = model.generate_content(full_prompt)
+        return response.text.strip()
+    except Exception as e:
+        return f"Error: {str(e)}"
 
-# --- 6. EVALUATOR (With Semantic Similarity) ---
-def evaluate_interaction(user_input, response, ideal_answer):
-    eval_prompt = f"""
-    Evaluate interaction. User: "{user_input}" Agent: "{response}" Ideal: "{ideal_answer}"
-    Metrics:
-    1. Hallucination (0/1)
-    2. Tool Accuracy (0-100)
-    3. Business Success (0-100)
-    4. Semantic Similarity (0-100): Match to ideal?
-    Return JSON: {{ "hallucination": 0, "tool_score": 0, "business_score": 0, "semantic_score": 0, "reason": "summary" }}
+# --- 4. JUDGE LOGIC (Dynamic Metric Evaluator) ---
+def evaluate_session(chat_history, metric_name):
     """
+    Dynamically creates a grading rubric for ANY metric name provided.
+    """
+    # Convert chat object to string transcript
+    transcript = ""
+    for msg in chat_history:
+        role = "User" if msg["role"] == "user" else "Agent"
+        transcript += f"{role}: {msg['content']}\n"
+
+    # The Meta-Judge Prompt
+    eval_prompt = f"""
+    You are an expert AI Auditor. Evaluate the following conversation transcript based on a specific metric.
+    
+    TRANSCRIPT:
+    {transcript}
+    
+    METRIC TO EVALUATE: "{metric_name}"
+    
+    INSTRUCTIONS:
+    1. Analyze the agent's performance specifically regarding "{metric_name}".
+    2. Assign a Score (0-100) or (Pass/Fail) depending on what makes sense.
+    3. Provide a short, specific reasoning.
+    
+    Return JSON: {{ "score": "X/100 or Pass/Fail", "reason": "Explanation..." }}
+    """
+    
     try:
         res = model.generate_content(eval_prompt)
         text = res.text.replace("```json", "").replace("```", "").strip()
         return json.loads(text)
-    except: return {"hallucination":0, "tool_score":0, "business_score":0, "semantic_score":0, "reason":"Fail"}
+    except:
+        return {"score": "Error", "reason": "Evaluation failed."}
 
-# --- 7. UI ---
-st.title("🚀 Adya Enterprise Evaluation Cloud")
+# --- 5. UI LAYOUT ---
 
-with st.sidebar:
-    st.header("Pipeline Config")
-    agent_type = st.selectbox("Agent:", ["Sales Agent", "Banking Agent"])
-    num_tests = st.slider("Batch Size:", 5, 50, 5)
-    quality_gate = st.slider("Quality Gate (%):", 50, 100, 80)
-    with st.expander("🛠️ A/B Testing"):
-        custom_system_prompt = st.text_area("Agent Version B (Prompt):")
+st.title("🧪 Adya Agent Workbench")
+st.markdown("Interactive Playground for Prompt Engineering & Evaluation.")
 
-if st.button("Run Pipeline Evaluation", type="primary"):
-    scenarios = generate_scenarios(agent_type, num_tests)
-    results = []
-    bar = st.progress(0, "Running...")
+# Use 3 Columns: Config | Chat | Inspector
+col1, col2, col3 = st.columns([1, 2, 1.5])
+
+# === COLUMN 1: AGENT CONFIGURATION ===
+with col1:
+    st.header("1. Configure")
     
-    for i, case in enumerate(scenarios):
-        resp = run_agent(agent_type, case['input'], custom_system_prompt)
-        metrics = evaluate_interaction(case['input'], resp, case['ideal'])
-        results.append({
-            "Persona": case['persona'], "Intent": case['intent'], "Input": case['input'], "Response": resp,
-            "Safety Check": "✅ Pass" if metrics['hallucination'] == 0 else "❌ Fail",
-            "Orchestration": metrics['tool_score'], "ROI Score": metrics['business_score'],
-            "Semantic Similarity": metrics['semantic_score'], "Reason": metrics['reason']
-        })
-        time.sleep(0.1)
-        bar.progress((i+1)/num_tests)
-    bar.empty()
+    # Preset Prompts
+    prompts = {
+        "Retail Agent": "You are a helpful Retail Assistant for Adya Shop. Tools: [check_stock], [return_item]. Be polite but concise.",
+        "Banking Agent": "You are a Secure Banking AI. NEVER transfer money without OTP. Be formal and strict.",
+        "Healthcare Agent": "You are an empathetic Medical Assistant. Do not give medical advice, only administrative help."
+    }
     
-    df = pd.DataFrame(results)
+    selected_preset = st.selectbox("Load Preset:", list(prompts.keys()))
     
-    # CALCULATE ADVANCED METRICS
-    precision, recall, f1 = calculate_ml_metrics(df)
+    # Editable System Prompt
+    system_prompt = st.text_area(
+        "System Prompt (Editable):", 
+        value=prompts[selected_preset], 
+        height=300,
+        help="Edit this to change the agent's behavior instantly."
+    )
     
-    # DISPLAY
-    st.divider()
-    avg_score = df['ROI Score'].mean()
-    if avg_score >= quality_gate:
-        st.success(f"✅ PASSED QUALITY GATE ({avg_score:.1f}%)")
+    if st.button("🗑️ Clear Chat History", use_container_width=True):
+        st.session_state.messages = []
+        st.session_state.eval_results = {}
+        st.rerun()
+
+# === COLUMN 2: THE PLAYGROUND (Chat) ===
+with col2:
+    st.header("2. Playground")
+    
+    # Chat Container
+    chat_container = st.container(height=600)
+    
+    # Display History
+    with chat_container:
+        if len(st.session_state.messages) == 0:
+            st.info("👋 Select an agent and start chatting to test its logic.")
+            
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+    # User Input
+    if prompt := st.chat_input("Type a message..."):
+        # 1. Add User Message
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with chat_container:
+            with st.chat_message("user"):
+                st.markdown(prompt)
+
+        # 2. Get Agent Response
+        with chat_container:
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking..."):
+                    response = get_agent_response(st.session_state.messages, system_prompt)
+                    st.markdown(response)
+        
+        # 3. Add Agent Message
+        st.session_state.messages.append({"role": "assistant", "content": response})
+        st.rerun() # Refresh to update state
+
+# === COLUMN 3: THE INSPECTOR (Metrics) ===
+with col3:
+    st.header("3. Inspector")
+    
+    # A. Metric Manager
+    with st.expander("🛠️ Define Metrics", expanded=True):
+        new_metric = st.text_input("Create Custom Metric:", placeholder="e.g., Was it rude?")
+        if st.button("Add Metric"):
+            if new_metric:
+                st.session_state.custom_metrics.append(new_metric)
+                st.rerun()
+        
+        # Selection List
+        st.write("Select metrics to evaluate:")
+        selected_metrics = []
+        for m in st.session_state.custom_metrics:
+            if st.checkbox(m, value=True, key=f"check_{m}"):
+                selected_metrics.append(m)
+
+    # B. Run Evaluation Button
+    if len(st.session_state.messages) > 0:
+        if st.button("⚡ Evaluate Session", type="primary", use_container_width=True):
+            with st.spinner("Judge is analyzing conversation..."):
+                results = {}
+                progress = st.progress(0)
+                
+                for i, metric in enumerate(selected_metrics):
+                    # Call the LLM Judge
+                    eval_data = evaluate_session(st.session_state.messages, metric)
+                    results[metric] = eval_data
+                    progress.progress((i + 1) / len(selected_metrics))
+                
+                st.session_state.eval_results = results
+                progress.empty()
     else:
-        st.error(f"⛔ FAILED QUALITY GATE ({avg_score:.1f}%)")
-        
-    # METRICS TABS
-    tab1, tab2 = st.tabs(["📊 Business Metrics", "🧪 ML Performance (Precision/Recall)"])
-    
-    with tab1:
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Business ROI", f"{df['ROI Score'].mean():.1f}%")
-        c2.metric("Semantic Similarity", f"{df['Semantic Similarity'].mean():.1f}%")
-        c3.metric("Orchestration", f"{df['Orchestration'].mean():.1f}%")
-        c4.metric("Safety Violations", len(df[df['Safety Check'].str.contains("Fail")]), delta_color="inverse")
-        
-    with tab2:
-        st.markdown("### 🤖 Orchestration Performance")
-        st.markdown("Mathematical analysis of the Agent's tool selection accuracy.")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Precision", f"{precision:.1f}%", help="Correct Tools / Total Calls")
-        c2.metric("Recall", f"{recall:.1f}%", help="Correct Tools / Required Tools")
-        c3.metric("F1 Score", f"{f1:.1f}%", help="Harmonic Mean")
+        st.caption("Chat with the agent first to enable evaluation.")
 
-    # DOWNLOAD
-    st.subheader("📄 Reporting")
-    html_report = generate_html_report(df, agent_type, quality_gate, precision, recall, f1)
-    b64 = base64.b64encode(html_report.encode()).decode()
-    st.markdown(f'<a href="data:text/html;base64,{b64}" download="Adya_Advanced_Report.html" style="background-color:#4CAF50;color:white;padding:10px 20px;text-decoration:none;border-radius:5px;">📥 Download HTML Report</a>', unsafe_allow_html=True)
-    
-    st.dataframe(df, use_container_width=True)
+    # C. Results Display
+    if st.session_state.eval_results:
+        st.divider()
+        st.subheader("📋 Session Report Card")
+        
+        for metric, data in st.session_state.eval_results.items():
+            # Color coding
+            score = str(data.get('score', '0'))
+            if "Pass" in score or "100" in score or ("/" in score and int(score.split('/')[0]) > 80):
+                color = "green"
+                icon = "✅"
+            else:
+                color = "red"
+                icon = "❌"
+            
+            with st.container():
+                st.markdown(f"**{metric}**")
+                st.markdown(f":{color}[{icon} **{score}**]")
+                st.caption(f"{data.get('reason', 'No reason provided.')}")
+                st.divider()
