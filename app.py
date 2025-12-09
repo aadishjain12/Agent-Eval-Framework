@@ -26,18 +26,17 @@ if GOOGLE_API_KEY == "YOUR_GOOGLE_API_KEY_HERE":
 genai.configure(api_key=GOOGLE_API_KEY)
 
 # --- 2. MODEL SETUP (Auto-Detect Fix) ---
+# --- 2. MODEL SETUP (Force Gemini 2.5 Flash) ---
 @st.cache_resource
 def get_model():
     try:
-        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        priority = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.0-pro", "gemini-pro"]
-        for p in priority:
-            for m in models:
-                if p in m: return genai.GenerativeModel(m)
-        return genai.GenerativeModel("gemini-pro")
-    except: return None
+        return genai.GenerativeModel("gemini-2.5-flash")
+    except Exception as e:
+        st.error(f"❌ Failed to load model: {str(e)}")
+        return None
 
 model = get_model()
+
 
 # --- 3. SESSION STATE INIT ---
 if "messages" not in st.session_state: st.session_state.messages = []
